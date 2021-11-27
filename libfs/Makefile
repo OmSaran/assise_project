@@ -70,11 +70,11 @@ MLFS_FLAGS += -DKLIB_HASH
 #MLFS_FLAGS += -DUSE_HDD
 #MLFS_FLAGS += -DMLFS_LOG
 
-#DEBUG = -g3 -O0
+DEBUG = -g3 -O0
 #DEBUG = -O0 -gdwarf-2 -g3 -rdynamic
 #DEBUG = -g -O2
 #DEBUG = -g -Ofast
-DEBUG = -O3
+# DEBUG = -O3
 
 ########
 #  vpath and compile function for each file

@@ -259,7 +259,7 @@ uint8_t *dax_init(uint8_t dev, char *dev_path)
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
 	pthread_mutex_init(&mlfs_nvm_mutex, &attr);
-
+	printf("mmapping the following device path %s\n", dev_path);
 	fd = open(dev_path, O_RDWR);
 	if (fd < 0) {
 		fprintf(stderr, "cannot open dax device %s\n", dev_path);
@@ -294,7 +294,6 @@ uint8_t *dax_init(uint8_t dev, char *dev_path)
 
 	printf("dev[%d] with offset %lu has base addr: %lu\n", dev, offset, (intptr_t)dax_addr[dev]);
 #endif
-
  	 dax_addr[dev] = (uint8_t *)mmap(NULL, dev_size[dev], PROT_READ | PROT_WRITE,
 		                        MAP_SHARED| MAP_POPULATE, fd, 0);
 
@@ -307,7 +306,7 @@ uint8_t *dax_init(uint8_t dev, char *dev_path)
 	// up to the max dev_size (last 550 MB is not accessible).
 	// dev_size[dev] -= (550 << 20);
 
-	printf("dev-dax engine is initialized: dev_path %s size %lu MB\n", 
+	mlfs_printf("dev-dax engine is initialized: dev_path %s size %lu MB\n", 
 			dev_path, dev_size[dev] >> 20);
 
 #ifdef ENABLE_MEMCPY_OFFLOAD

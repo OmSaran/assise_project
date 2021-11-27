@@ -510,15 +510,16 @@ void *mlfs_posix_mmap(int fd)
 	uint64_t blk_base;
 	bmap_req_t bmap_req;
 
-	mlfs_posix("[POSIX] mmap(fd=%d)", fd);
+	printf("[POSIX] mmap(fd=%d)", fd);
 
 	f = &g_fd_table.open_files[fd];
 	if (f->ref == 0) {
-		mlfs_debug("mmap: bad fd %d\n", fd);
-		return NULL;
+		printf("mmap: bad fd %d\n", fd);
+		return MAP_FAILED;
 	}
 	blk_count = f->ip->size >> g_block_size_shift;
-	mlfs_debug("blk_count = %lu, size = %lu\n", blk_count, f->ip->size);
+	blk_count = blk_count == 0 ? 1: blk_count;
+	printf("blk_count = %lu, size = %lu\n", blk_count, f->ip->size);
 	blk_found = 0;
 
 	bmap_req.start_offset = 0;
@@ -526,30 +527,60 @@ void *mlfs_posix_mmap(int fd)
 	bmap_req.blk_count_found = 0;
 	ret = bmap(f->ip, &bmap_req);
 	if (ret == -EIO || bmap_req.dev != g_root_dev) {
-		mlfs_posix("mmap: bad extent, error %d\n", ret);
-		return NULL;
+		printf("mmap: bad extent, error %d\n", ret);
+		return MAP_FAILED;
 	}
-	mlfs_debug("first extent: block %lu, length %u\n", bmap_req.block_no, bmap_req.blk_count_found);
+	printf("first extent: block %lu, length %u\n", bmap_req.block_no, bmap_req.blk_count_found);
 	blk_base = bmap_req.block_no;
 	blk_found = bmap_req.blk_count_found;
+
+	// Mmap all the blocks found until now
+	int dax_fd = open("/dev/dax0.0", O_RDWR);
+	assert(dax_fd >= 0);
+	void *new_va = mmap(NULL, blk_found * g_block_size_bytes, 
+		PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, dax_fd, blk_base << g_block_size_shift);
+	void *end_addr = new_va + (blk_found * g_block_size_bytes);
+	//
+
 	while (blk_found < blk_count) {
 		bmap_req.blk_count_found = 0;
 		bmap_req.blk_count = blk_count - blk_found;
+		// blockno * g_block_size_bytes
 		bmap_req.start_offset = blk_found << g_block_size_shift;
 		ret = bmap(f->ip, &bmap_req);
 		if (ret == -EIO || bmap_req.dev != g_root_dev) {
-                	mlfs_debug("mmap: bad extent, error %d\n", ret);
-                	return NULL;
-        	}
-		mlfs_debug("next extent: block %lu, length %u\n", bmap_req.block_no, bmap_req.blk_count_found);
+			printf("mmap: bad extent, error %d\n", ret);
+			return MAP_FAILED;
+		}
+		printf("next extent: block %lu, length %u\n", bmap_req.block_no, bmap_req.blk_count_found);
 		if (blk_base + blk_found != bmap_req.block_no) {
-			mlfs_debug("mmap: non-contiguous extent at block %lu, file block %lu\n", bmap_req.block_no, blk_found);
-			return NULL;
+			printf("mmap: non-contiguous extent at block %lu, file block %lu\n", bmap_req.block_no, blk_found);
+			void *temp = mmap(end_addr, bmap_req.blk_count_found * g_block_size_bytes, PROT_READ | PROT_WRITE, 
+				MAP_FIXED_NOREPLACE | MAP_SHARED | MAP_POPULATE, dax_fd, bmap_req.block_no << g_block_size_shift);
+			if(temp == MAP_FAILED) 
+				perror("contiguous mmap failed");
+			assert(temp != MAP_FAILED);
+			end_addr = end_addr + (bmap_req.blk_count_found *g_block_size_bytes);
+		} else {
+			// We assume that all contiguous blocks will be retrieved in the first bmap call
+			assert(0);
 		}
 		blk_found += bmap_req.blk_count_found;
 	}
 
-	return (void *) ((blk_base << g_block_size_shift) + g_bdev[g_root_dev]->map_base_addr);
+	printf("The original VA is %ld\n", (void *) ((blk_base << g_block_size_shift) + g_bdev[g_root_dev]->map_base_addr));
+	// long offset = (blk_base << g_block_size_shift);
+	// printf("The offset is %ld\n", offset);
+
+	// void* new_va = mmap(NULL, (4 << 10), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, dax_fd, blk_base << g_block_size_shift);
+	// assert(new_va != MAP_FAILED);
+	assert(((long)new_va) % (4 << 10) == 0);
+
+	printf("new_va = %ld\n", new_va);
+
+	return new_va;
+
+	// return (void *) ((blk_base << g_block_size_shift) + g_bdev[g_root_dev]->map_base_addr);
 }
 
 int mlfs_posix_unlink(const char *filename)

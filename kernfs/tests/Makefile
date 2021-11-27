@@ -18,9 +18,9 @@ INCLUDES  := $(addprefix -I, .. . $(NVML_DIR)/include $(CUCKOO_DIR)/src)
 
 LD_FLAGS = -lpthread -lm -L$(NVML_DIR)/nondebug/ -Wl,-rpath=$(abspath $(NVML_DIR)/nondebug) -lpmem -lrt
 LD_FLAGS_CXX = -lpthread -L$(NVML_DIR)/nondebug/ -Wl,-rpath=$(abspath $(NVML_DIR)/nondebug) -lpmem -lrt
-#DEBUG = -g -O0
+DEBUG = -ggdb -O0
 #DEBUG = -g -Ofast
-DEBUG = -O3
+# DEBUG = -O3
 
 ########
 #  Phony targets

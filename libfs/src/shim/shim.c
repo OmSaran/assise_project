@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 
+#include <sys/mman.h>
 #include <filesystem/fs.h>
 #include <posix/posix_interface.h>
 #include <global/types.h>
@@ -541,8 +542,8 @@ int shim_do_mmap(void *addr, size_t length, int prot,
   void* ret;
 
   if (check_mlfs_fd(fd)) {
-    printf("mmap: not implemented\n");
-    exit(-1);
+    *result = mlfs_posix_mmap(get_mlfs_fd(fd));
+    return 0;
   } else {
     return 1;
   }

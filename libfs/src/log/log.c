@@ -187,7 +187,7 @@ void init_log()
 	//while(!g_fs_log->ready);
 #endif
 
-	printf("init log dev %d start_blk %lu end %lu\n", g_log_dev,
+	mlfs_printf("init log dev %d start_blk %lu end %lu\n", g_log_dev,
 			g_fs_log->start_blk, g_fs_log->size);
 }
 
