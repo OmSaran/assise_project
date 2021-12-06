@@ -29,6 +29,7 @@ int mlfs_posix_truncate(const char *filename, offset_t length);
 int mlfs_posix_ftruncate(int fd, offset_t length);
 int mlfs_posix_rename(char *oldname, char *newname);
 int mlfs_posix_fsync(int fd);
+int mlfs_posix_mmap_search_idx(void * addr);
 void *mlfs_posix_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 size_t mlfs_posix_getdents(int fd, struct linux_dirent *buf, size_t nbytes, offset_t off);
 size_t mlfs_posix_getdents64(int fd, struct linux_dirent64 *buf, size_t nbytes, offset_t off);

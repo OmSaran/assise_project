@@ -550,13 +550,15 @@ dram:
 }
 
 int search_addr(void* addr) {
-    for (int i = 0; i < map_size; i++) {
+	// printf("search_addr map_size = %d\n", map_size);
+    for (int i = 0; i <= map_size; i++) {
         if (((uint64_t)addr >= (uint64_t)map_list[i].addr) &&
                 ((uint64_t)addr < (uint64_t)map_list[i].addr +
                 map_list[i].length)) {
             return i;
         }
     }
+	// printf("Could not find address %ld\n", (long)addr);
     return -1;
 }
 
@@ -566,21 +568,99 @@ void swap_map_list(int lhs, int rhs) {
     map_list[rhs] = temp;
 }
 
-// int munmap_assise(void *addr, size_t len) {
-//     int index = search_addr(addr);
-//     if (index < 0) {
-//         printf("INVALID ADDRESS\n");
-//         return -1;
-//     }
-//     swap_map_list(index, map_size);
-//     if (map_list[map_size].flags & MAP_SHARED) {
-//         msync_assise(map_list[map_size].addr, map_list[map_size].length, MS_SYNC);
-//         request_munmap_shared(map_list[map_size].inode);
-//     }
-//     munmap(map_list[map_size].addr, map_list[map_size].length);
-//     map_size--;
-//     return 0;
-// }
+int mlfs_posix_mmap_search_idx(void * addr) {
+	int index = search_addr(addr);
+    if (index < 0) {
+        return -1;
+    }
+	return index;
+}
+
+int msync_assise(void *addr, size_t length, int flags) {
+    // if (flags & MS_ASYNC) {
+    //     return 0;
+    // }
+    int index = search_addr(addr);
+    if (index < 0) {
+        printf("INVALID ADDRESS 1 for address %ld\n", (long)addr);
+		exit(1);
+        return -1;
+    }
+    if ((map_list[index].prot & PROT_WRITE) == 0) {
+        return 0;
+    }
+    if (map_list[index].flags & MAP_PRIVATE) {
+        return 0;
+    }
+    lseek(map_list[index].fd + g_fd_start, map_list[index].offset + (uint64_t)addr -
+            (uint64_t)map_list[index].addr, SEEK_SET);
+    write(map_list[index].fd + g_fd_start, map_list[index].addr, map_list[index].length);
+    return 0;
+}
+
+void request_munmap_shared(ino_t inode) {
+	struct sockaddr_un uds_addr;
+    struct msghdr msg;
+    struct iovec iovec[1];
+    int ret;
+	int uds_fd;
+	request_t req;
+	request_type_t req_type;
+    
+    uds_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+	memset(&uds_addr, 0, sizeof(struct sockaddr_un));
+	uds_addr.sun_family = AF_UNIX;
+	strncpy(uds_addr.sun_path, UDS_SOCKET_PATH, strlen(UDS_SOCKET_PATH));
+
+    ret = connect(uds_fd, (struct sockaddr *) &uds_addr, sizeof(struct sockaddr_un));
+    if(ret < 0) {
+        perror("connect");
+        exit(1);
+    }
+
+    msg.msg_iov = iovec;
+    msg.msg_iovlen = 1;
+    // iovec[0].iov_base = (void *)data;
+    // iovec[0].iov_len = strlen(data);
+
+    // char buf[1024];
+
+    // strncpy(buf, data, strlen(data));
+
+	req.inode = inode;
+	req_type = MUNMAP;
+	req.req_type = req_type;
+
+	printf("Size of request_t = %d\n", sizeof(request_t));
+    ret = send(uds_fd, (void *)&req, sizeof(request_t), 0);
+	if(ret < 0) {
+		perror("Failed to send information");
+	}
+    printf("Sent request to unmap data for inode %d with %d amount of data\n", inode, ret);
+    // int recvfd = -1;
+    // char c;
+    // ret = get_fd_from_shared_fs(uds_fd, &c, 1, &recvfd);
+
+    // printf("Received the following fd %d\n", recvfd);
+}
+
+int mlfs_posix_munmap(void *addr, size_t length, int idx) {
+	//CURRENTLY MUNMAPS WHOLE ALLOCATION
+    int index = search_addr(addr);
+    if (index < 0) {
+        printf("INVALID ADDRESS 2\n");
+        return -1;
+    }
+    swap_map_list(index, map_size);
+    if (map_list[map_size].flags & MAP_SHARED) {
+        msync_assise(map_list[map_size].addr, map_list[map_size].length, MS_SYNC);
+        request_munmap_shared(map_list[map_size].inode);
+    }
+    syscall_no_intercept(SYS_munmap, map_list[map_size].addr, map_list[map_size].length);
+    map_size--;
+    return 0;
+}
 
 ssize_t get_fd_from_shared_fs(int fd, void *ptr, size_t nbytes, int *recvfd)
 {
@@ -700,6 +780,10 @@ void *mlfs_posix_mmap_dram(void *addr, size_t length, int prot, int flags, int f
         map_list[map_size].fd = fd;
         map_list[map_size].offset = offset;
 
+		struct file* f;
+		f = &g_fd_table.open_files[fd];
+		f->ref++;
+
 		assert(map_list[map_size].fd >= 0);
 
         struct stat sb;
@@ -716,6 +800,8 @@ void *mlfs_posix_mmap_dram(void *addr, size_t length, int prot, int flags, int f
 		}
 
         void* buffer = mmap(addr, length, prot, flags, memfd, offset);
+		assert(buffer != MAP_FAILED);
+		// printf("Setting map_list[%d].addr = %ld\n", map_size, (long)buffer);
         map_list[map_size].addr = buffer;
 
         map_size++;

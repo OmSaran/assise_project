@@ -552,8 +552,18 @@ int shim_do_mmap(void *addr, size_t length, int prot,
 
 int shim_do_munmap(void *addr, size_t length, int* result)
 {
-  if(nvm_mmap)
+  int idx;
+  idx = mlfs_posix_mmap_search_idx(addr);
+  if(idx < 0) {
+    printf("Not DRAM Assise Munmap!\n");
     return 1;
+  } else {
+    *result = mlfs_posix_munmap(addr, length, idx);
+  }
+  
+
+  // if(nvm_mmap)
+  //   return 1;
 }
 
 int shim_do_getdents(int fd, struct linux_dirent *buf, size_t count, size_t* result)
