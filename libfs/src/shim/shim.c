@@ -542,7 +542,7 @@ int shim_do_mmap(void *addr, size_t length, int prot,
   void* ret;
 
   if (check_mlfs_fd(fd)) {
-    *result = mlfs_posix_mmap(get_mlfs_fd(fd));
+    *result = mlfs_posix_mmap(get_mlfs_fd(fd), length, prot, flags, fd, offset);
     return 0;
   } else {
     return 1;
@@ -552,8 +552,8 @@ int shim_do_mmap(void *addr, size_t length, int prot,
 
 int shim_do_munmap(void *addr, size_t length, int* result)
 {
-  return 1;
-
+  if(nvm_mmap)
+    return 1;
 }
 
 int shim_do_getdents(int fd, struct linux_dirent *buf, size_t count, size_t* result)

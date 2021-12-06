@@ -2,6 +2,15 @@
 #include "messaging.h"
 #include "agent.h"
 
+#include <sys/socket.h>
+#include <sys/un.h>
+
+#define UDS_SOCKET_PATH "/tmp/kernfs-server.socket"
+
+static ssize_t send_fd_to_libfs(int fd, void *ptr, size_t nbytes, int sendfd);
+static void *uds_thread_body(void* arg);
+static void handle_connection(int data_socket);
+
 __attribute__((visibility ("hidden"))) 
 int shmem_chan_add(int portno, int realfd, int app_type, pid_t pid, int polling)
 {
@@ -89,7 +98,7 @@ void shmem_poll_loop(int sockfd)
 	gettimeofday(&start, NULL);
 	//do stuff
 
-	printf("start shmem_poll_loop for sockfd %d\n", ctx->sockfd);
+	// printf("start shmem_poll_loop for sockfd %d\n", ctx->sockfd);
 	while(ctx->poll_enable) {
 		recv_msg = shmem_recv(ctx);
 
@@ -148,13 +157,13 @@ void shmem_poll_loop(int sockfd)
 
 	}
 
-	printf("end shmem_poll_loop for sockfd %d\n", ctx->sockfd);
+	// printf("end shmem_poll_loop for sockfd %d\n", ctx->sockfd);
 
 }
 
 void * local_client_thread(void *arg)
 {
-	printf("In thread\n");
+	// printf("In thread\n");
 
 	char send_path[32];
 	char recv_path[32];
@@ -200,13 +209,13 @@ void * local_client_thread(void *arg)
 		mp_die("send failed");
 	}
 
-	printf("SEND --> MSG_INIT [pid %s]\n", init_msg);
+	// printf("SEND --> MSG_INIT [pid %s]\n", init_msg);
 
 	if(recv(ctx->realfd, shm_msg, 128, 0) <= 0) {
 		mp_die("Receive failed");
 	}
 
-	printf("RECV <-- MSG_SHM [paths: %s]\n", shm_msg);
+	// printf("RECV <-- MSG_SHM [paths: %s]\n", shm_msg);
 
 	split_char(shm_msg, send_path, recv_path);
 
@@ -274,7 +283,7 @@ void * local_server_thread(void *arg)
 	ctx->app_type = atoi(app_str);
 	ctx->pid = atol(pid_str);
 
-	printf("RECV <-- MSG_INIT [pid %d]\n", ctx->app_type);
+	// printf("RECV <-- MSG_INIT [pid %d]\n", ctx->app_type);
 
 	shmem_chan_setup(sockfd, send_addr, recv_addr);
 
@@ -284,7 +293,7 @@ void * local_server_thread(void *arg)
 		mp_die("send failed");
 	}
 
-	printf("SEND --> MSG_SHM [paths: %s]\n", shm_msg);
+	// printf("SEND --> MSG_SHM [paths: %s]\n", shm_msg);
 
 	set_channel_state(ctx, CH_CONNECTION_READY);
 
@@ -357,9 +366,35 @@ void * local_server_loop(void *port)
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_port = htons(atoi(port));
 	serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	int yes = 1;
+	int ret = setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, (void *)&yes, sizeof(yes));
+	printf("setsockopt return = %d\n", ret);
+	if(ret != 0) {
+		mp_die("failed to set socketopt");
+	}
 	if(bind(server_socket, (struct sockaddr *) &serv_addr, sizeof(serv_addr)))
 		mp_die("Error binding socket");
 
+	// unix domain socket
+	// struct sockaddr_un uds_addr;
+	// int uds_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	// printf("Server socket fd = %d\n", uds_fd);
+	// if (remove(UDS_SOCKET_PATH) == -1 && errno != ENOENT) {
+	// 	mp_die("Failed to remove existing Unix Domain socket\n");
+	// }
+
+	// memset(&uds_addr, 0, sizeof(struct sockaddr_un));
+	// uds_addr.sun_family = AF_UNIX;
+	// strncpy(uds_addr.sun_path, UDS_SOCKET_PATH, sizeof(uds_addr.sun_path) - 1);
+	// if (bind(uds_fd, (struct sockaddr *) &uds_addr, sizeof(struct sockaddr_un)) == -1) {
+	// 	mp_die("Failed to bind unix domain socket");
+	// }
+	// if (listen(uds_fd, 128) == -1) {
+	// 	mp_die("Failed to listen unix domain socket");
+	// }
+	// pthread_t uds_thread;
+	//
+	
 
 	//Listen on the socket, with 128 max connection requests queued
 	if(listen(server_socket,128)==0)
@@ -367,6 +402,11 @@ void * local_server_loop(void *port)
 	else
 		mp_die("Error listening on socket");
 #if 1
+
+	pthread_t uds_thread;
+	if(pthread_create(&uds_thread, NULL, uds_thread_body, NULL) != 0)
+			mp_die("Failed to create unix domain socket thread");
+
 	int *sock_arg;
 	while(1) {
 		addr_size = sizeof serverStorage;
@@ -386,3 +426,95 @@ void * local_server_loop(void *port)
 	return NULL;
 }
 
+static void *uds_thread_body(void* arg) {
+	struct sockaddr_un uds_addr;
+	int uds_fd;
+    int data_socket;
+    
+    uds_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+	printf("Server socket fd = %d\n", uds_fd);
+	if (remove(UDS_SOCKET_PATH) == -1 && errno != ENOENT) {
+		perror("Failed to remove existing Unix Domain socket\n");
+        exit(-1);
+	}
+
+	memset(&uds_addr, 0, sizeof(struct sockaddr_un));
+	uds_addr.sun_family = AF_UNIX;
+	strncpy(uds_addr.sun_path, UDS_SOCKET_PATH, strlen(UDS_SOCKET_PATH));
+	if (bind(uds_fd, (struct sockaddr *) &uds_addr, sizeof(struct sockaddr_un)) == -1) {
+		perror("Failed to bind unix domain socket");
+        exit(-1);
+	}
+	if (listen(uds_fd, 128) == -1) {
+		perror("Failed to listen unix domain socket");
+        exit(-1);
+	}
+
+    for(;;) {
+		data_socket = accept(uds_fd, NULL, NULL);
+		if (data_socket == -1) {
+			perror("accept");
+			exit(1);
+		}
+		printf("Got a connection!\n");
+
+		handle_connection(data_socket);
+	}
+}
+
+static void handle_connection(int data_socket) {
+	struct msghdr msg;
+	struct iovec iovec[1];
+	char buf[1024];
+
+	// msg.
+	msg.msg_iovlen = 1;
+	msg.msg_iov = iovec;
+	// msg.msg_iov[0].iov_len = 13;
+	printf("Waiting to receive data\n");
+	int ret = recv(data_socket, buf, 1024, 0);
+	if(ret <= 0) {
+		perror("recvmsg");
+		exit(1);
+	}
+	printf("Read %d amount of data\n", ret);
+	printf("Read the following %s\n", buf);
+
+	int fd = open("file.txt", O_RDWR);
+	assert(fd >= 0);
+
+	send_fd_to_libfs(data_socket, "", 1, fd);
+}
+
+static ssize_t send_fd_to_libfs(int fd, void *ptr, size_t nbytes, int sendfd)
+{
+	struct msghdr msg;
+	struct iovec iov[1];
+
+	union {
+		struct cmsghdr cm;
+		char control[CMSG_SPACE(sizeof(int))];
+	} control_un;
+	struct cmsghdr *cmptr;
+
+	msg.msg_control = control_un.control;
+	msg.msg_controllen = sizeof(control_un.control);
+
+	cmptr = CMSG_FIRSTHDR(&msg);
+	cmptr->cmsg_len = CMSG_LEN(sizeof(int));
+	cmptr->cmsg_level = SOL_SOCKET;
+	cmptr->cmsg_type = SCM_RIGHTS;
+	*((int *) CMSG_DATA(cmptr)) = sendfd;
+
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+
+	iov[0].iov_base = ptr;
+	iov[0].iov_len = nbytes;
+
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 1;
+
+	return (sendmsg(fd, &msg, 0));
+}

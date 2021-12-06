@@ -50,9 +50,13 @@ static int isdirempty(struct inode *dp)
 #endif
 
 int posix_init = 0;
+int nvm_mmap = 1;
 
 #define SHM_START_PATH "/shm_lease_test"
 #define SHM_F_SIZE 128
+
+void *mlfs_posix_mmap_nvm(void *addr, int fd, size_t length, int prot, int flags, off_t offset);
+void *mlfs_posix_mmap_dram(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 
 void* create_shm() {
 	void * addr;
@@ -501,8 +505,30 @@ int mlfs_posix_fallocate(int fd, offset_t offset, offset_t len)
 	return 0;
 }
 
-void *mlfs_posix_mmap(int fd)
+void *mlfs_posix_mmap(void *addr, size_t length, int prot,
+                   int flags, int fd, off_t offset) {
+	void * ret;
+
+	if(nvm_mmap) {
+		if((prot & PROT_WRITE) && (flags & MAP_PRIVATE))
+			goto dram;
+		
+		ret = mlfs_posix_mmap_nvm(addr, fd, length, prot, flags, offset);
+		if(ret != MAP_FAILED) 
+			return ret;
+	}
+dram:
+	return mlfs_posix_mmap_dram(addr, length, prot, flags, fd, offset);
+}
+
+void *mlfs_posix_mmap_dram(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
+	return MAP_FAILED;
+}
+
+void *mlfs_posix_mmap_nvm(void *addr, int fd, size_t length, int prot,
+                   int flags, off_t offset)
 {
+	
 	struct file *f;
 	int ret;
 	uint64_t blk_count;
@@ -517,9 +543,9 @@ void *mlfs_posix_mmap(int fd)
 		printf("mmap: bad fd %d\n", fd);
 		return MAP_FAILED;
 	}
-	blk_count = f->ip->size >> g_block_size_shift;
+	blk_count = length >> g_block_size_shift;
 	blk_count = blk_count == 0 ? 1: blk_count;
-	printf("blk_count = %lu, size = %lu\n", blk_count, f->ip->size);
+	printf("blk_count = %lu, size = %lu\n", blk_count, length);
 	blk_found = 0;
 
 	bmap_req.start_offset = 0;
@@ -537,8 +563,9 @@ void *mlfs_posix_mmap(int fd)
 	// Mmap all the blocks found until now
 	int dax_fd = open("/dev/dax0.0", O_RDWR);
 	assert(dax_fd >= 0);
-	void *new_va = mmap(NULL, blk_found * g_block_size_bytes, 
-		PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, dax_fd, blk_base << g_block_size_shift);
+	void *new_va = mmap(addr, blk_found * g_block_size_bytes, prot, flags, dax_fd, blk_base << g_block_size_shift);
+	if(new_va == MAP_FAILED)
+		return new_va;
 	void *end_addr = new_va + (blk_found * g_block_size_bytes);
 	//
 
@@ -555,8 +582,7 @@ void *mlfs_posix_mmap(int fd)
 		printf("next extent: block %lu, length %u\n", bmap_req.block_no, bmap_req.blk_count_found);
 		if (blk_base + blk_found != bmap_req.block_no) {
 			printf("mmap: non-contiguous extent at block %lu, file block %lu\n", bmap_req.block_no, blk_found);
-			void *temp = mmap(end_addr, bmap_req.blk_count_found * g_block_size_bytes, PROT_READ | PROT_WRITE, 
-				MAP_FIXED_NOREPLACE | MAP_SHARED | MAP_POPULATE, dax_fd, bmap_req.block_no << g_block_size_shift);
+			void *temp = mmap(end_addr, bmap_req.blk_count_found * g_block_size_bytes, prot, flags, dax_fd, bmap_req.block_no << g_block_size_shift);
 			if(temp == MAP_FAILED) 
 				perror("contiguous mmap failed");
 			assert(temp != MAP_FAILED);
