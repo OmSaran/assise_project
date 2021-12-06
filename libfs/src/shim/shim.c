@@ -560,10 +560,6 @@ int shim_do_munmap(void *addr, size_t length, int* result)
   } else {
     *result = mlfs_posix_munmap(addr, length, idx);
   }
-  
-
-  // if(nvm_mmap)
-  //   return 1;
 }
 
 int shim_do_getdents(int fd, struct linux_dirent *buf, size_t count, size_t* result)

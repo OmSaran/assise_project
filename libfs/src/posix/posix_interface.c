@@ -542,8 +542,11 @@ void *mlfs_posix_mmap(void *addr, size_t length, int prot,
 	void * ret;
 
 	if(mmap_mode == 2 || mmap_mode == 1) {
-		if((prot & PROT_WRITE) && (flags & MAP_PRIVATE))
-			goto dram;
+		if((prot & PROT_WRITE) && (flags & MAP_PRIVATE)) {
+			if(mmap_mode == 2)
+				goto dram;
+			panic("Private writable mmap not supported on NVM mmap approach!\n");
+		}
 		
 		ret = mlfs_posix_mmap_nvm(addr, fd, length, prot, flags, offset);
 		if(ret != MAP_FAILED) 
