@@ -492,37 +492,43 @@ int search_inode(ino_t inode) {
     return -1;
 }
 
-int process_request(request_type_t type, ino_t inode) {
+void swap_file_list(int lhs, int rhs) {
+    Shared_file temp = file_list[lhs];
+    file_list[lhs] = file_list[rhs];
+    file_list[rhs] = temp;
+}
+
+int process_request(request_type_t type, ino_t inode, int data_socket) {
 	if (type == MMAP) {
         int index = search_inode(inode);
+		int memfd;
         if (index < 0) {
-            int memfd = memfd_create("assise", 0);
+            memfd = memfd_create("assise", 0);
 
             file_list[num_files].inode = inode;
             file_list[num_files].memfd = memfd;
             file_list[num_files].refcount = 1;
             num_files++;
-
-            return memfd;
-
         } else {
             file_list[index].refcount++;
-            return file_list[index].memfd;
+            memfd = file_list[index].memfd;
         }
-    } 
-	// else if (type == MUNMAP) {
-    //     int index = search_inode(inode);
-    //     if (index < 0) {
-    //         return -1;
-    //     }
-    //     file_list[index].refcount--;
-    //     if (file_list[index].refcount == 0) {
-    //         swap_file_list(index, num_files);
-    //         close(file_list[num_files].memfd);
-    //         num_files--;
-    //     }
-    //     return 0;
-    // }
+		return send_fd_to_libfs(data_socket, "", 1, memfd);
+    }
+	else if (type == MUNMAP) {
+        int index = search_inode(inode);
+        if (index < 0) {
+            return -1;
+        }
+        file_list[index].refcount--;
+        if (file_list[index].refcount == 0) {
+			swap_file_list(index, num_files-1);
+			printf("Closing the memfd corresponding to inode %d!!\n", file_list[index].inode);
+            close(file_list[num_files-1].memfd);
+            num_files--;
+        }
+        return 0;
+    }
     return -1;
 }
 
@@ -530,7 +536,6 @@ static void handle_connection(int data_socket) {
 	struct msghdr msg;
 	struct iovec iovec[1];
 	request_t req;
-	int memfd;
 
 	// msg.
 	msg.msg_iovlen = 1;
@@ -548,9 +553,7 @@ static void handle_connection(int data_socket) {
 	// int fd = open("file.txt", O_RDWR);
 	// assert(fd >= 0);
 
-	memfd = process_request(req.req_type, req.inode);
-
-	send_fd_to_libfs(data_socket, "", 1, memfd);
+	process_request(req.req_type, req.inode, data_socket);
 }
 
 static ssize_t send_fd_to_libfs(int fd, void *ptr, size_t nbytes, int sendfd)

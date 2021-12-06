@@ -560,7 +560,7 @@ dram:
 
 int search_addr(void* addr) {
 	// printf("search_addr map_size = %d\n", map_size);
-    for (int i = 0; i <= map_size; i++) {
+    for (int i = 0; i < map_size; i++) {
         if (((uint64_t)addr >= (uint64_t)map_list[i].addr) &&
                 ((uint64_t)addr < (uint64_t)map_list[i].addr +
                 map_list[i].length)) {
@@ -661,11 +661,11 @@ int mlfs_posix_munmap(void *addr, size_t length, int idx) {
         printf("INVALID ADDRESS 2\n");
         return -1;
     }
-	swap_map_list(index, map_size);
-    if (map_list[map_size].flags & MAP_SHARED) {
-        msync_assise(map_list[map_size].addr, map_list[map_size].length, MS_SYNC);
-        request_munmap_shared(map_list[map_size].inode);
-    }
+	swap_map_list(index, map_size-1);
+    if (map_list[map_size-1].flags & MAP_SHARED) {
+        msync_assise(map_list[map_size-1].addr, map_list[map_size-1].length, MS_SYNC);
+        request_munmap_shared(map_list[map_size-1].inode);
+	}
     syscall_no_intercept(SYS_munmap, map_list[map_size].addr, map_list[map_size].length);
     map_size--;
     return 0;
