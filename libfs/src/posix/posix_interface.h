@@ -8,8 +8,6 @@
 extern "C" {
 #endif
 
-int nvm_mmap;
-
 int mlfs_posix_open(char *path, int flags, unsigned short mode);
 int mlfs_posix_access(char *pathname, int mode);
 int mlfs_posix_creat(char *path, uint16_t mode);

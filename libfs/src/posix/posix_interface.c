@@ -50,7 +50,11 @@ static int isdirempty(struct inode *dp)
 #endif
 
 int posix_init = 0;
-int nvm_mmap = 0;
+
+// 0 = DRAM only
+// 1 = NVM only
+// 2 = Use NVM on best effort, otherwise fall back to DRAM.
+int mmap_mode = 2;
 
 #define SHM_START_PATH "/shm_lease_test"
 #define SHM_F_SIZE 128
@@ -537,12 +541,14 @@ void *mlfs_posix_mmap(void *addr, size_t length, int prot,
                    int flags, int fd, off_t offset) {
 	void * ret;
 
-	if(nvm_mmap) {
+	if(mmap_mode == 2 || mmap_mode == 1) {
 		if((prot & PROT_WRITE) && (flags & MAP_PRIVATE))
 			goto dram;
 		
 		ret = mlfs_posix_mmap_nvm(addr, fd, length, prot, flags, offset);
 		if(ret != MAP_FAILED) 
+			return ret;
+		if(mmap_mode == 1)
 			return ret;
 	}
 dram:
