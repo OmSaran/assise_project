@@ -555,7 +555,7 @@ int shim_do_munmap(void *addr, size_t length, int* result)
   int idx;
   idx = mlfs_posix_mmap_search_idx(addr);
   if(idx < 0) {
-    printf("Not DRAM Assise Munmap!\n");
+    // printf("Not DRAM Assise Munmap!\n");
     return 1;
   } else {
     *result = mlfs_posix_munmap(addr, length, idx);

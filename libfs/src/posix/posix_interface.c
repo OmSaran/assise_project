@@ -652,7 +652,7 @@ int mlfs_posix_munmap(void *addr, size_t length, int idx) {
         printf("INVALID ADDRESS 2\n");
         return -1;
     }
-    swap_map_list(index, map_size);
+	swap_map_list(index, map_size);
     if (map_list[map_size].flags & MAP_SHARED) {
         msync_assise(map_list[map_size].addr, map_list[map_size].length, MS_SYNC);
         request_munmap_shared(map_list[map_size].inode);

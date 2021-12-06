@@ -30,7 +30,7 @@ int main() {
     // ((char *)addr)[5] = 'b';
     // ((char *)addr)[6] = '\0';
 
-    close(fd);
     munmap(addr, 6);
+    close(fd);
     shutdown_fs();
 }
