@@ -6,10 +6,30 @@
 #include <sys/un.h>
 
 #define UDS_SOCKET_PATH "/tmp/kernfs-server.socket"
+#define MAX_FILES_ASSISE_MMAP 1024
 
 static ssize_t send_fd_to_libfs(int fd, void *ptr, size_t nbytes, int sendfd);
 static void *uds_thread_body(void* arg);
 static void handle_connection(int data_socket);
+
+typedef enum {
+    MMAP,
+    MUNMAP,
+} request_type_t;
+
+typedef struct {
+	request_type_t req_type;
+	ino_t inode;
+} request_t;
+
+typedef struct {
+    ino_t inode;
+    int memfd;
+    int refcount;
+} Shared_file;
+
+Shared_file file_list[MAX_FILES_ASSISE_MMAP];
+int num_files = 0;
 
 __attribute__((visibility ("hidden"))) 
 int shmem_chan_add(int portno, int realfd, int app_type, pid_t pid, int polling)
@@ -463,28 +483,74 @@ static void *uds_thread_body(void* arg) {
 	}
 }
 
+int search_inode(ino_t inode) {
+    for (int i = 0; i < num_files; i++) {
+        if (inode == file_list[i].inode) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int process_request(request_type_t type, ino_t inode) {
+	if (type == MMAP) {
+        int index = search_inode(inode);
+        if (index < 0) {
+            int memfd = memfd_create("assise", 0);
+
+            file_list[num_files].inode = inode;
+            file_list[num_files].memfd = memfd;
+            file_list[num_files].refcount = 1;
+            num_files++;
+
+            return memfd;
+
+        } else {
+            file_list[index].refcount++;
+            return file_list[index].memfd;
+        }
+    } 
+	// else if (type == MUNMAP) {
+    //     int index = search_inode(inode);
+    //     if (index < 0) {
+    //         return -1;
+    //     }
+    //     file_list[index].refcount--;
+    //     if (file_list[index].refcount == 0) {
+    //         swap_file_list(index, num_files);
+    //         close(file_list[num_files].memfd);
+    //         num_files--;
+    //     }
+    //     return 0;
+    // }
+    return -1;
+}
+
 static void handle_connection(int data_socket) {
 	struct msghdr msg;
 	struct iovec iovec[1];
-	char buf[1024];
+	request_t req;
+	int memfd;
 
 	// msg.
 	msg.msg_iovlen = 1;
 	msg.msg_iov = iovec;
 	// msg.msg_iov[0].iov_len = 13;
 	printf("Waiting to receive data\n");
-	int ret = recv(data_socket, buf, 1024, 0);
+	int ret = recv(data_socket, (void *)&req, sizeof(request_t), 0);
 	if(ret <= 0) {
 		perror("recvmsg");
 		exit(1);
 	}
-	printf("Read %d amount of data\n", ret);
-	printf("Read the following %s\n", buf);
+	// printf("Read %d amount of data\n", ret);
+	// printf("Read the following: type = %d, inode = %d\n", req.req_type, req.inode);
 
-	int fd = open("file.txt", O_RDWR);
-	assert(fd >= 0);
+	// int fd = open("file.txt", O_RDWR);
+	// assert(fd >= 0);
 
-	send_fd_to_libfs(data_socket, "", 1, fd);
+	memfd = process_request(req.req_type, req.inode);
+
+	send_fd_to_libfs(data_socket, "", 1, memfd);
 }
 
 static ssize_t send_fd_to_libfs(int fd, void *ptr, size_t nbytes, int sendfd)

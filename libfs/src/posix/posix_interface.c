@@ -50,13 +50,41 @@ static int isdirempty(struct inode *dp)
 #endif
 
 int posix_init = 0;
-int nvm_mmap = 1;
+int nvm_mmap = 0;
 
 #define SHM_START_PATH "/shm_lease_test"
 #define SHM_F_SIZE 128
+#define MAX_MAPPINGS 1024
+#define UDS_SOCKET_PATH "/tmp/kernfs-server.socket"
 
 void *mlfs_posix_mmap_nvm(void *addr, int fd, size_t length, int prot, int flags, off_t offset);
 void *mlfs_posix_mmap_dram(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
+
+typedef struct {
+    void* addr;
+    size_t length;
+    int prot;
+    int flags;
+    int fd;
+    off_t offset;
+    ino_t inode;
+    int memfd;
+} Mapping;
+
+Mapping map_list[MAX_MAPPINGS];
+int map_size = 0;
+
+typedef enum {
+    MMAP,
+    MUNMAP,
+} request_type_t;
+
+typedef struct {
+	request_type_t req_type;
+	ino_t inode;
+} request_t;
+
+
 
 void* create_shm() {
 	void * addr;
@@ -521,8 +549,194 @@ dram:
 	return mlfs_posix_mmap_dram(addr, length, prot, flags, fd, offset);
 }
 
+int search_addr(void* addr) {
+    for (int i = 0; i < map_size; i++) {
+        if (((uint64_t)addr >= (uint64_t)map_list[i].addr) &&
+                ((uint64_t)addr < (uint64_t)map_list[i].addr +
+                map_list[i].length)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void swap_map_list(int lhs, int rhs) {
+    Mapping temp = map_list[lhs];
+    map_list[lhs] = map_list[rhs];
+    map_list[rhs] = temp;
+}
+
+// int munmap_assise(void *addr, size_t len) {
+//     int index = search_addr(addr);
+//     if (index < 0) {
+//         printf("INVALID ADDRESS\n");
+//         return -1;
+//     }
+//     swap_map_list(index, map_size);
+//     if (map_list[map_size].flags & MAP_SHARED) {
+//         msync_assise(map_list[map_size].addr, map_list[map_size].length, MS_SYNC);
+//         request_munmap_shared(map_list[map_size].inode);
+//     }
+//     munmap(map_list[map_size].addr, map_list[map_size].length);
+//     map_size--;
+//     return 0;
+// }
+
+ssize_t get_fd_from_shared_fs(int fd, void *ptr, size_t nbytes, int *recvfd)
+{
+    struct msghdr msg;
+    struct iovec iov[1];
+    ssize_t n;
+
+    union {
+        struct cmsghdr cm;
+        char control[CMSG_SPACE(sizeof (int))];
+    } control_un;
+    struct cmsghdr *cmptr;
+    msg.msg_control = control_un.control;
+    msg.msg_controllen = sizeof(control_un.control);
+    msg.msg_name = NULL;
+    msg.msg_namelen = 0;
+    iov[0].iov_base = ptr;
+    iov[0].iov_len = nbytes;
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 1;
+    if ( (n = recvmsg(fd, &msg, 0)) <= 0)
+        return (n);
+
+    if ( (cmptr = CMSG_FIRSTHDR(&msg)) != NULL && cmptr->cmsg_len == CMSG_LEN(sizeof(int))) {
+        if (cmptr->cmsg_level != SOL_SOCKET) {
+            perror("control level != SOL_SOCKET");
+            exit(1);
+        }
+        if (cmptr->cmsg_type != SCM_RIGHTS){
+            perror("control type != SCM_RIGHTS");
+            exit(1);
+        }
+        *recvfd = *((int *) CMSG_DATA(cmptr));
+    } else
+        *recvfd = -1; /* descriptor was not passed */
+    return (n);
+}
+
+int request_mmap_shared(ino_t inode) {
+    struct sockaddr_un uds_addr;
+    struct msghdr msg;
+    struct iovec iovec[1];
+    int ret;
+	int uds_fd;
+	request_t req;
+	request_type_t req_type;
+    
+    uds_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+	memset(&uds_addr, 0, sizeof(struct sockaddr_un));
+	uds_addr.sun_family = AF_UNIX;
+	strncpy(uds_addr.sun_path, UDS_SOCKET_PATH, strlen(UDS_SOCKET_PATH));
+
+    ret = connect(uds_fd, (struct sockaddr *) &uds_addr, sizeof(struct sockaddr_un));
+    if(ret < 0) {
+        perror("connect");
+        exit(1);
+    }
+
+    msg.msg_iov = iovec;
+    msg.msg_iovlen = 1;
+    // iovec[0].iov_base = (void *)data;
+    // iovec[0].iov_len = strlen(data);
+
+    // char buf[1024];
+
+    // strncpy(buf, data, strlen(data));
+
+	req.inode = inode;
+	req_type = MMAP;
+	req.req_type = req_type;
+
+	printf("Size of request_t = %d\n", sizeof(request_t));
+    ret = send(uds_fd, (void *)&req, sizeof(request_t), 0);
+	if(ret < 0) {
+		perror("Failed to send information");
+	}
+    printf("Finished sending %d amount of data\n", ret);
+    int recvfd = -1;
+    char c;
+    ret = get_fd_from_shared_fs(uds_fd, &c, 1, &recvfd);
+
+    printf("Received the following fd %d\n", recvfd);
+	return recvfd;
+}
+
+void copy(int fd1, int fd2) {
+    char buffer[4096];
+
+	// This is a hack, use assise lower level api directly for read/write to fix this.
+	fd1 = fd1 + g_fd_start;
+	printf("fd1 = %d\n", fd1);
+
+    lseek(fd1, 0, SEEK_SET);
+    lseek(fd2, 0, SEEK_SET);
+    int length = 0;
+    int bytes = read(fd1, buffer, 4096);
+    while (bytes > 0) {
+        length += bytes;
+        write(fd2, buffer, bytes);
+        bytes = read(fd1, buffer, 4096);
+    }
+
+    ftruncate(fd2, length);
+}
+
 void *mlfs_posix_mmap_dram(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-	return MAP_FAILED;
+	if (map_size == MAX_MAPPINGS) {
+        printf("MAX NUMBER OF MAPPINGS REACHED");
+        return NULL;
+    }
+    if (flags & MAP_SHARED) {
+        //printf("SHARED MAPPING NOT IMPLEMENTED\n");
+        map_list[map_size].length = length;
+        map_list[map_size].prot = prot;
+        map_list[map_size].flags = flags;
+        map_list[map_size].fd = fd;
+        map_list[map_size].offset = offset;
+
+		assert(map_list[map_size].fd >= 0);
+
+        struct stat sb;
+        assert(fstat(fd, &sb) == 0);
+        map_list[map_size].inode = sb.st_ino;
+
+        int memfd = request_mmap_shared(sb.st_ino);
+        map_list[map_size].memfd = memfd;
+        fstat(memfd, &sb);
+        if (sb.st_size == 0) {
+            copy(fd, memfd);
+        } else {
+			printf("----------------------- Not copying since it is already populated! -----------------------\n");
+		}
+
+        void* buffer = mmap(addr, length, prot, flags, memfd, offset);
+        map_list[map_size].addr = buffer;
+
+        map_size++;
+
+        return buffer;
+    } else {
+        void* buffer = mmap(addr, length, prot, flags, -1, 0);
+        lseek(fd, offset, SEEK_SET);
+        read(fd, buffer, length);
+
+        map_list[map_size].addr = buffer;
+        map_list[map_size].length = length;
+        map_list[map_size].prot = prot;
+        map_list[map_size].flags = flags;
+        map_list[map_size].fd = fd;
+        map_list[map_size].offset = offset;
+        map_size++;
+
+        return buffer;
+    }
+    return MAP_FAILED;
 }
 
 void *mlfs_posix_mmap_nvm(void *addr, int fd, size_t length, int prot,
