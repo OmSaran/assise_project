@@ -54,7 +54,7 @@ int posix_init = 0;
 // 0 = DRAM only
 // 1 = NVM only
 // 2 = Use NVM on best effort, otherwise fall back to DRAM.
-int mmap_mode = 2;
+int mmap_mode = 1;
 
 #define SHM_START_PATH "/shm_lease_test"
 #define SHM_F_SIZE 128
@@ -603,7 +603,7 @@ int msync_assise(void *addr, size_t length, int flags) {
     }
     lseek(map_list[index].fd + g_fd_start, map_list[index].offset + (uint64_t)addr -
             (uint64_t)map_list[index].addr, SEEK_SET);
-    write(map_list[index].fd + g_fd_start, map_list[index].addr, map_list[index].length);
+    write(map_list[index].fd + g_fd_start, map_list[index].addr, length);
     return 0;
 }
 
@@ -772,7 +772,7 @@ void copy(int fd1, int fd2) {
         write(fd2, buffer, bytes);
         bytes = read(fd1, buffer, 4096);
     }
-
+	printf("copy: Ftruncate to length %ld\n", length);
     ftruncate(fd2, length);
 }
 
@@ -803,11 +803,13 @@ void *mlfs_posix_mmap_dram(void *addr, size_t length, int prot, int flags, int f
         map_list[map_size].memfd = memfd;
         fstat(memfd, &sb);
         if (sb.st_size == 0) {
+			printf("----------------------- Copying since it is NOT populated! -----------------------\n");
             copy(fd, memfd);
         } else {
 			printf("----------------------- Not copying since it is already populated! -----------------------\n");
 		}
 
+		printf("----------------------- mmapping with length %ld -----------------------\n", length);
         void* buffer = mmap(addr, length, prot, flags, memfd, offset);
 		assert(buffer != MAP_FAILED);
 		// printf("Setting map_list[%d].addr = %ld\n", map_size, (long)buffer);
@@ -837,6 +839,12 @@ void *mlfs_posix_mmap_dram(void *addr, size_t length, int prot, int flags, int f
 void *mlfs_posix_mmap_nvm(void *addr, int fd, size_t length, int prot,
                    int flags, off_t offset)
 {
+	while(make_digest_request_async(100) != -EBUSY);
+    wait_on_digesting();
+    while(make_digest_request_async(100) != -EBUSY);
+    wait_on_digesting();
+    while(make_digest_request_async(100) != -EBUSY);
+    wait_on_digesting();
 	
 	struct file *f;
 	int ret;
@@ -862,7 +870,7 @@ void *mlfs_posix_mmap_nvm(void *addr, int fd, size_t length, int prot,
 	bmap_req.blk_count_found = 0;
 	ret = bmap(f->ip, &bmap_req);
 	if (ret == -EIO || bmap_req.dev != g_root_dev) {
-		printf("mmap: bad extent, error %d\n", ret);
+		printf("mmap 1: bad extent, error %d\n", ret);
 		return MAP_FAILED;
 	}
 	printf("first extent: block %lu, length %u\n", bmap_req.block_no, bmap_req.blk_count_found);
@@ -889,16 +897,23 @@ void *mlfs_posix_mmap_nvm(void *addr, int fd, size_t length, int prot,
 			return MAP_FAILED;
 		}
 		printf("next extent: block %lu, length %u\n", bmap_req.block_no, bmap_req.blk_count_found);
+		if(bmap_req.dev != g_root_dev)
+			assert(0);
 		if (blk_base + blk_found != bmap_req.block_no) {
 			printf("mmap: non-contiguous extent at block %lu, file block %lu\n", bmap_req.block_no, blk_found);
-			void *temp = mmap(end_addr, bmap_req.blk_count_found * g_block_size_bytes, prot, flags, dax_fd, bmap_req.block_no << g_block_size_shift);
+			void *temp = mmap(end_addr, bmap_req.blk_count_found * g_block_size_bytes, prot, flags | MAP_FIXED_NOREPLACE, dax_fd, bmap_req.block_no << g_block_size_shift);
 			if(temp == MAP_FAILED) 
-				perror("contiguous mmap failed");
+				perror("non contiguous mmap failed");
 			assert(temp != MAP_FAILED);
 			end_addr = end_addr + (bmap_req.blk_count_found *g_block_size_bytes);
 		} else {
 			// We assume that all contiguous blocks will be retrieved in the first bmap call
-			assert(0);
+			printf("mmap: contiguous extent at block %lu, file block %lu\n", bmap_req.block_no, blk_found);
+			void *temp = mmap(end_addr, bmap_req.blk_count_found * g_block_size_bytes, prot, flags | MAP_FIXED, dax_fd, bmap_req.block_no << g_block_size_shift);
+			if(temp == MAP_FAILED) 
+				perror("non contiguous mmap failed");
+			assert(temp != MAP_FAILED);
+			end_addr = end_addr + (bmap_req.blk_count_found *g_block_size_bytes);
 		}
 		blk_found += bmap_req.blk_count_found;
 	}

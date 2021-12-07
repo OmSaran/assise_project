@@ -562,6 +562,19 @@ int shim_do_munmap(void *addr, size_t length, int* result)
   }
 }
 
+int shim_do_msync(void *addr, size_t length, int flags, int *result)
+{
+  int idx;
+  idx = mlfs_posix_mmap_search_idx(addr);
+  if(idx < 0) {
+    // printf("Not DRAM Assise Munmap!\n");
+    return 1;
+  } else {
+    *result = msync_assise(addr, length, idx);
+    return 0;
+  }
+}
+
 int shim_do_getdents(int fd, struct linux_dirent *buf, size_t count, size_t* result)
 {
   size_t ret;
@@ -631,6 +644,7 @@ hook(long syscall_number,
     case SYS_fcntl: return shim_do_fcntl((int)arg0, (int)arg1, (void*)arg2, (int*)result);
     case SYS_mmap: return shim_do_mmap((void*)arg0, (size_t)arg1, (int)arg2, (int)arg3, (int)arg4, (off_t)arg5, (void**)result);
     case SYS_munmap: return shim_do_munmap((void*)arg0, (size_t)arg1, (int*)result);
+    case SYS_msync: return shim_do_msync((void*)arg0, (size_t)arg1, (int)arg2, (int*)result);
     case SYS_getdents: return shim_do_getdents((int)arg0, (struct linux_dirent*)arg1, (size_t)arg2, (size_t*)result);
     case SYS_getdents64: return shim_do_getdents64((int)arg0, (struct linux_dirent64*)arg1, (size_t)arg2, (size_t*)result);
   }
